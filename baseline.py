@@ -17,7 +17,7 @@ class OurDataset(Dataset):
     # self.reviews = self.data['summary']
     # self.ratings = self.data['overall']
     self.len_max = len_max # the maximum length of a review to consider
-    self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True) # add do_lower_case, if you want to do all lowercase text
+    self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased') # add do_lower_case, if you want to do all lowercase text
 
   def __len__(self):
     return len(self.data)
@@ -62,7 +62,7 @@ class RatingPredictor(nn.Module):
     #                               intermediate_size=3072,
     #                               num_labels=rating_scale) # change to multi-class
     # load in pretrained model
-    self.bert = BertModel.from_pretrained('bert-base-uncased', do_lower_case=True)
+    self.bert = BertModel.from_pretrained('bert-base-uncased')
     # self.bert = BertForSequenceClassification('bert-base-uncased', do_lower_case=True, num_labels=rating_scale) # this one has a linear layer after the pooled layer
     # because we want to fine-tune, make sure that the weights from BERT aren't updated
     for param in self.bert.parameters():
@@ -93,24 +93,24 @@ def dataloader(fileName, bs):
   # split the data into train, val, and test
   train_split = 0.5
   val_split = 0.3
-  fullsize = len(raw)
+  fullsize = len(raw_data)
   indices = list(range(fullsize))
   split1 = int(np.floor(train_split * fullsize))
   split2 = int(np.floor(val_split * fullsize))
   np.random.shuffle(indices)
   train_ind, val_ind, test_ind = indices[:split1], indices[split1:split1+split2], indices[split1+split2:]
   # using the split indices, get the samples
-  train_sampler = SubsetRandomSampler(train_ind)
-  val_sampler = SubsetRandomSampler(val_ind)
-  test_sampler = SubsetRandomSampler(test_ind)
+  train_sampler = torch.utils.data.SubsetRandomSampler(train_ind)
+  val_sampler = torch.utils.data.SubsetRandomSampler(val_ind)
+  test_sampler = torch.utils.data.SubsetRandomSampler(test_ind)
   # utilize OurDataset class to create & tokenize the data
-  train_data = OurDataset(train_samples, 186)
-  val_data = OurDataset(val_samples, 186)
-  test_data = OurDataset(test_samples, 186)
+  all_data = OurDataset(raw_data, 186)
+  # val_data = OurDataset(val_samples, 186)
+  # test_data = OurDataset(test_samples, 186)
   # use DataLoader
-  train_loader = DataLoader(train_data, batch_size=bs, sampler=train_sampler, shuffle=True)
-  val_loader = DataLoader(val_data, batch_size=bs, sampler=val_sampler, shuffle=True)
-  test_loader = DataLoader(test_data, batch_size=bs, sampler=test_sampler) # ??
+  train_loader = DataLoader(all_data, batch_size=bs, sampler=train_sampler, shuffle=True)
+  val_loader = DataLoader(all_data, batch_size=bs, sampler=val_sampler, shuffle=True)
+  test_loader = DataLoader(all_data, batch_size=bs, sampler=test_sampler) # ??
   return train_loader, val_loader, test_loader
 
 
@@ -156,6 +156,7 @@ def train(model, train_loader, val_loader, epochs, learning_rate):
     total_loss = 0.0
     total_acc = 0.0
     # iterate through the batches
+    iter = 0
     for iter, (tokens, attention_mask, label) in enumerate(train_loader):
       optimizer.zero_grad()
       pred = model(tokens, attention_mask) # predict using tokens & attention mask
@@ -167,10 +168,10 @@ def train(model, train_loader, val_loader, epochs, learning_rate):
       optimizer.step()
       # add in loss and accuracy (number of correctly predicted ratings)
       total_loss += float(loss)
-      total_acc += float(get_accuracy(pred, label)
+      total_acc += float(get_accuracy(pred, label))
     
       # for us to see where we are in training
-      if ((iter+1) % 2000) == 0:
+      if (iter+1) % 2000 == 0:
         print("Epoch {}  - Iteration {}  - Training Time: {}".format(epoch+1, iter+1, startTime-time.time()))
 
     train_loss.append(total_loss / (iter+1)) # calculate the average loss across all iterations per epoch
@@ -190,5 +191,10 @@ def train(model, train_loader, val_loader, epochs, learning_rate):
 if __name__ == "__main__": 
   # initiate instance of network
   mod = RatingPredictor(rating_scale=5)
+  print("Initiated Instance of Our Network")
   # load the data for training and validation, set aside the test
   train, val, test = dataloader('train.json', bs=16)
+  print("Finish loading our data splits!")
+  # train and check validation
+  mod.train(True)
+  train_loss, train_acc, val_loss, val_acc = train(mod, train_loader, val_loader, epochs=4, learning_rate=0.01)
