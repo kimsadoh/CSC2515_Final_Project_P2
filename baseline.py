@@ -8,12 +8,15 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, SubsetRandomSampler
 import torch.optim as optim
 import sklearn as sk
+import time
+from sklearn.model_selection import train_test_split
 
 # to convert our data to the BERT language representation & use its vocabulary
 class OurDataset(Dataset):
   def __init__(self, data, len_max):
     # expected data input is a pandas dataframe
     self.data = data
+    self.data.reset_index(drop=True, inplace=True)
     # self.reviews = self.data['summary']
     # self.ratings = self.data['overall']
     self.len_max = len_max # the maximum length of a review to consider
@@ -23,8 +26,8 @@ class OurDataset(Dataset):
     return len(self.data)
 
   def __getitem__(self, ind):
-    review = self.data.loc[ind, 'summary']
-    rating = self.data.loc[ind, 'overall'] # Ratings=1,2,3,4,5
+    review = self.data.loc[ind, 'reviewText']
+    rating = int(self.data.loc[ind, 'overall']) - 1 # Ratings=1,2,3,4,5
     # use the BERT Tokenizer to ensure review is represented similarly
     tokens = self.tokenizer.tokenize(review)
     # recall that BERT uses additional token embeddings
@@ -46,8 +49,8 @@ class OurDataset(Dataset):
     # MLM to distinguish between the PAD and the important tokens
     attention_mask = (tokens_to_tensors != 0).long()
     # convert our labels into tensors
-    label = torch.tensor(rating).long()
-    return tokens_to_tensors, attention_mask, label
+    # label = torch.tensor(rating).long()
+    return tokens_to_tensors, attention_mask, rating
 
 
 # to import the pretrained BERT Model
@@ -69,17 +72,51 @@ class RatingPredictor(nn.Module):
       param.requires_grad = False
     
     # our classifer on top of the BERT Model
+    self.linear1 = nn.Linear(768, 500)
+    self.relu = nn.ReLU()
     self.drop = nn.Dropout(0.5) # dropout with 50%
-    self.fc = nn.LogSoftmax(nn.Linear(768, rating_scale), dim=1) # output of Bert Model is 768 to our rating scale
+    self.linear2 = nn.Linear(500, rating_scale)
+    # self.fc = nn.LogSoftmax(dim=0) # to calculate the probabilities
+    self.fc = nn.LogSoftmax(dim=1)
 
   def forward(self, tokens, attention_mask):
     # grab the BERT Model outputs after forward pass
-    _, pooled_output = self.bert(input_ids=tokens, attention_mask=attention_mask) 
+    outputs = self.bert.forward(input_ids=tokens, attention_mask=attention_mask) 
     # forward pass for Bert will return two outputs
     # 12 layers to one pooled output, so grab last output layer
     # pooled output size should be (1, 768) as we pass one review at a time
-    pooled_output = self.drop(pooled_output)
-    return self.fc(pooled_output)
+    pooled_output = outputs.pooler_output
+    #print(outputs.pooler_output)
+    lin_output1 = self.linear1(pooled_output)
+    relu_output = self.relu(lin_output1)
+    dropped_output = self.drop(relu_output)
+    lin_output2 = self.linear2(dropped_output)
+    result = self.fc(lin_output2)
+    return result
+
+"""
+  def forward(self, tokens, attention_mask):
+    # grab the BERT Model outputs after forward pass
+    output = self.bert(input_ids=tokens, attention_mask=attention_mask, return_dict=True) 
+    # forward pass for Bert will return two outputs
+    # 12 layers to one pooled output, so grab last output layer
+    # pooled output size should be (1, 768) as we pass one review at a time
+    # print(output.pooler_output[0].size())
+    pooled_output = output['pooler_output'][0]
+    lin_output1 = self.linear1(pooled_output)
+    print("through first linear layer")
+    relu_output = self.relu(lin_output1)
+    print("ReLu'ed!!")
+    dropped_output = self.drop(relu_output)
+    print("dropped bish")
+    lin_output2 = self.linear2(dropped_output)
+    print("Linear 2, almost there")
+    print(lin_output2.size())
+    result = self.fc(lin_output2)
+    print("Log soft max completo")
+    print(result.size())
+    return result
+  """
 
 
 # training and validation functions
@@ -89,51 +126,73 @@ def dataloader(fileName, bs):
   np.random.seed(42)
   # load data from fileName
   raw_data = pd.read_json(fileName, lines=True, orient='columns', dtype=True)
-  raw_data = raw_data[['summary', 'overall']]
+  raw_data = raw_data[['reviewText', 'overall']]
+  raw_data = raw_data.dropna()
   # split the data into train, val, and test
-  train_split = 0.5
-  val_split = 0.3
-  fullsize = len(raw_data)
-  indices = list(range(fullsize))
-  split1 = int(np.floor(train_split * fullsize))
-  split2 = int(np.floor(val_split * fullsize))
-  np.random.shuffle(indices)
-  train_ind, val_ind, test_ind = indices[:split1], indices[split1:split1+split2], indices[split1+split2:]
+  # reduce the original 200,000 to 50,000, with the original proportions of each class
+  X_temp1, X_temp2, y_temp1, y_temp2 = train_test_split(raw_data['reviewText'], raw_data['overall'], test_size=0.25, stratify=raw_data['overall'], random_state=42)
+  # now we have 50,000 examples in  X_temp2, y_temp2
+  X_train, X_temp3, y_train, y_temp3 = train_test_split(X_temp2, y_temp2, test_size=0.5, stratify=y_temp2, random_state=42)
+  # X_train now has 25,000 examples
+  X_val, X_test, y_val, y_test = train_test_split(X_temp3, y_temp3, test_size=0.5, stratify=y_temp3, random_state=42)
+  # X_val & X_test have 12,500 examples each
+  # merge X and ys to feed into OurDataset
+  train_set = pd.DataFrame(X_train)
+  train_set['overall'] = y_train
+  val_set = pd.DataFrame(X_val)
+  val_set['overall'] = y_val
+  test_set = pd.DataFrame(X_test)
+  test_set['overall'] = y_test
+  # train_set = raw_data.sample(frac=0.5, random_state=42)
+  # temp = raw_data.drop(train_set.index)
+  # val_set = temp.sample(frac=0.3, random_state=42)
+  # test_set = temp.drop(val_set.index)
+  # train_split = 0.5
+  # val_split = 0.3
+  # fullsize = len(raw_data)
+  # indices = list(range(fullsize))
+  # split1 = int(np.floor(train_split * fullsize))
+  # split2 = int(np.floor(val_split * fullsize))
+  # np.random.shuffle(indices)
+  # train_ind, val_ind, test_ind = indices[:split1], indices[split1:split1+split2], indices[split1+split2:]
   # using the split indices, get the samples
-  train_sampler = torch.utils.data.SubsetRandomSampler(train_ind)
-  val_sampler = torch.utils.data.SubsetRandomSampler(val_ind)
-  test_sampler = torch.utils.data.SubsetRandomSampler(test_ind)
+  # train_sampler = torch.utils.data.SubsetRandomSampler(train_ind)
+  # val_sampler = torch.utils.data.SubsetRandomSampler(val_ind)
+  # test_sampler = torch.utils.data.SubsetRandomSampler(test_ind)
   # utilize OurDataset class to create & tokenize the data
-  all_data = OurDataset(raw_data, 186)
-  # val_data = OurDataset(val_samples, 186)
-  # test_data = OurDataset(test_samples, 186)
+  # all_data = OurDataset(raw_data, 186)
+  train_data = OurDataset(train_set, 512)
+  val_data = OurDataset(val_set, 512)
+  test_data = OurDataset(test_set, 512)
   # use DataLoader
-  train_loader = DataLoader(all_data, batch_size=bs, sampler=train_sampler, shuffle=True)
-  val_loader = DataLoader(all_data, batch_size=bs, sampler=val_sampler, shuffle=True)
-  test_loader = DataLoader(all_data, batch_size=bs, sampler=test_sampler) # ??
+  train_loader = DataLoader(train_data, batch_size=bs, shuffle=False)
+  val_loader = DataLoader(val_data, batch_size=bs, shuffle=False)
+  test_loader = DataLoader(test_data, batch_size=bs) # ??
   return train_loader, val_loader, test_loader
 
 
 def get_accuracy(pred, label):
   # determine the index of the most likely rating
-  index = pred.max(dim=1)[1]
+  index = torch.argmin(pred, dim = 1) + 1
   return (index==label).sum().item()
 
 
 def evaluate(model, loader, criterion):
   """Evaluate the network model based on validation set.
   """
-  model.train(False)
+  #model.train(False)
   model.eval() # go into evaluation mode
   iter, acc, err = 0, 0, 0
   with torch.no_grad():
     total_loss = 0.0
     total_acc = 0.0
-    for iter, (tokens, attention_mask, label) in enumerate(loader):
+    for iter, (tokens, attention_mask, rating) in enumerate(loader):
       pred = model(tokens, attention_mask)
-      loss = criterion(pred, label)
+      # loss = criterion(nn.LogSoftmax(pred, dim=1), rating)
+      loss = criterion(pred, rating)
       total_loss += loss.item()
-      total_acc += get_accuracy(pred, label)
+      # total_acc += get_accuracy(nn.LogSoftmax(pred, dim=1), rating)
+      total_acc += get_accuracy(pred, rating)
       iter += 1
     err = float(total_loss) / (iter)
     acc = float(total_acc) / (iter)
@@ -143,11 +202,12 @@ def evaluate(model, loader, criterion):
 def train(model, train_loader, val_loader, epochs, learning_rate):
   """Use training and validation, train the model.
   """
-  # model.train(True)
+  print("I'm at the start")
+  model.train(True)
   torch.manual_seed(42) # for reproducibility
   # define loss function and optimizer for weight updates
-  target_weights = [20, 19, 8, 3, 1]# Weights that should be multiplied to the learning rate of the optimizer
-  criterion = nn.NLLLoss(weight=torch.tensor(target_weights))
+  target_weights = torch.FloatTensor([20/41, 19/41, 8/41, 3/41, 1/41]) # Weights that should be multiplied to the learning rate of the optimizer
+  criterion = nn.NLLLoss(weight=target_weights)
   optimizer = optim.Adam(model.parameters(), lr=learning_rate)
   # to store values later
   train_acc, train_loss, val_acc, val_loss = [], [], [], []
@@ -156,19 +216,21 @@ def train(model, train_loader, val_loader, epochs, learning_rate):
     total_loss = 0.0
     total_acc = 0.0
     # iterate through the batches
-    iter = 0
-    for iter, (tokens, attention_mask, label) in enumerate(train_loader):
+    # iter = 0
+    for iter, (tokens, attention_mask, rating) in enumerate(train_loader):
       optimizer.zero_grad()
       pred = model(tokens, attention_mask) # predict using tokens & attention mask
       # compute loss
-      loss = criterion(pred, label)
+      # loss = criterion(nn.LogSoftmax(pred, dim=1), rating)
+      loss = criterion(pred, rating)
       # backprop
       loss.backward()
       # weight updates
       optimizer.step()
       # add in loss and accuracy (number of correctly predicted ratings)
       total_loss += float(loss)
-      total_acc += float(get_accuracy(pred, label))
+      total_acc += float(get_accuracy(pred, rating))
+      # total_acc += float(get_accuracy(nn.LogSoftmax(pred, dim=1), rating))
     
       # for us to see where we are in training
       if (iter+1) % 2000 == 0:
@@ -179,7 +241,7 @@ def train(model, train_loader, val_loader, epochs, learning_rate):
     total_loss = 0.0
     # compute validation loss at the end of each epoch
     val_err, val_acc = evaluate(model, val_loader, criterion)
-    val_loss.append(val_error)
+    val_loss.append(val_err)
     val_acc.append(val_acc)
 
     print("END  ---  Epoch {}  ---  Training Error: {}  ---   Validation Error: {}".format(
@@ -188,13 +250,16 @@ def train(model, train_loader, val_loader, epochs, learning_rate):
 
   return train_loss, train_acc, val_loss, val_acc
 
+
 if __name__ == "__main__": 
+  # load the data for training and validation, set aside the test
+  train_loader, val_loader, test_loader = dataloader('train.json', bs=16)
+  print("Finish loading our data splits!")
+  
   # initiate instance of network
   mod = RatingPredictor(rating_scale=5)
   print("Initiated Instance of Our Network")
-  # load the data for training and validation, set aside the test
-  train, val, test = dataloader('train.json', bs=16)
-  print("Finish loading our data splits!")
+
   # train and check validation
-  mod.train(True)
+  # mod.train(True)
   train_loss, train_acc, val_loss, val_acc = train(mod, train_loader, val_loader, epochs=4, learning_rate=0.01)
