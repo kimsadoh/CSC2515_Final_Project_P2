@@ -168,17 +168,17 @@ def dataloader(fileName, bs):
   train_loader = DataLoader(train_data, batch_size=bs, shuffle=False)
   val_loader = DataLoader(val_data, batch_size=bs, shuffle=False)
   test_loader = DataLoader(test_data, batch_size=bs) # ??
-  return train_loader, val_loader, test_loader
+  return train_loader, val_loader, test_loader, len(train_set), len(val_set), len(test_set)
 
 
 def get_accuracy(pred, label):
   # determine the index of the most likely rating
   index = torch.argmin(pred, dim = 1) + 1
   # return the number of correctly predicted ratings / number of total examples in a batch
-  return (index==label).sum().item() / len(label)
+  return (index==label).sum().item()
 
 
-def evaluate(model, loader, criterion):
+def evaluate(model, loader, loader_len, criterion):
   """Evaluate the network model based on validation set.
   """
   #model.train(False)
@@ -192,17 +192,16 @@ def evaluate(model, loader, criterion):
       # loss = criterion(nn.LogSoftmax(pred, dim=1), rating)
       loss = criterion(pred, rating)
       total_loss += loss.item()
-      # total_acc += get_accuracy(nn.LogSoftmax(pred, dim=1), rating)
       total_acc += get_accuracy(pred, rating)
       if (iter + 1) % 100 == 0:
         print("Iter {}     -     Loss: {}     -       Accuracy: {}".format(iter+1, total_loss / (iter+1), total_acc / (iter+1)))
     
     err = (total_loss) / (iter + 1)
-    acc = (total_acc) / (iter + 1) # average accuracy across all batches
+    acc = (total_acc) / (loader_len) # the total number of correctly predicted 
   return err, acc
 
 
-def train(model, train_loader, val_loader, epochs, learning_rate):
+def train(model, train_loader, train_len, val_loader, val_len, epochs, learning_rate):
   """Use training and validation, train the model.
   """
   print("I'm at the start")
@@ -236,27 +235,25 @@ def train(model, train_loader, val_loader, epochs, learning_rate):
     
       # for us to see where we are in training
       if (iter+1) % 100 == 0:
-        print("Epoch {}  - Iteration {}  - Training Time: {} -     Loss: {}     -     Accuracy: {}".format(epoch+1, iter+1, time.time()-startTime,
-        total_loss / (iter+1), total_acc / (iter+1)))
+        print("Epoch {}  - Iteration {}  - Training Time: {} -     Loss: {}".format(epoch+1, iter+1, time.time()-startTime,
+        total_loss / (iter+1)))
 
     train_loss.append(total_loss / (iter+1)) # calculate the average loss across all iterations per epoch
-    train_acc.append(total_acc / (iter+1)) # calculate the average accuracy across all batches
+    train_acc.append(total_acc / train_len) # calculate the number of correctly predicted ratings / total training examples
     total_loss = 0.0
     # compute validation loss at the end of each epoch
-    val_err, val_avg_acc = evaluate(model, val_loader, criterion)
+    val_err, val_avg_acc = evaluate(model, val_loader, val_len, criterion)
     val_loss.append(val_err)
     val_acc.append(val_avg_acc)
 
     print("END  ---  Epoch {}  ---  Training Error: {}  ---   Validation Error: {}".format(
-        epoch, train_loss[epoch], val_loss[epoch]
-    ))
-
+        epoch, train_loss[epoch], val_err))
   return train_loss, train_acc, val_loss, val_acc
 
 
 if __name__ == "__main__": 
   # load the data for training and validation, set aside the test
-  train_loader, val_loader, test_loader = dataloader('train.json', bs=16)
+  train_loader, val_loader, test_loader, train_len, val_len, test_len = dataloader('train.json', bs=16)
   print("Finish loading our data splits!")
   
   # initiate instance of network
@@ -265,4 +262,4 @@ if __name__ == "__main__":
 
   # train and check validation
   # mod.train(True)
-  train_loss, train_acc, val_loss, val_acc = train(mod, train_loader, val_loader, epochs=4, learning_rate=0.01)
+  train_loss, train_acc, val_loss, val_acc = train(mod, train_loader, val_loader, train_len, val_len, epochs=4, learning_rate=0.01)
