@@ -174,7 +174,8 @@ def dataloader(fileName, bs):
 def get_accuracy(pred, label):
   # determine the index of the most likely rating
   index = torch.argmin(pred, dim = 1) + 1
-  return (index==label).sum().item()
+  # return the number of correctly predicted ratings / number of total examples in a batch
+  return (index==label).sum().item() / len(label)
 
 
 def evaluate(model, loader, criterion):
@@ -182,7 +183,7 @@ def evaluate(model, loader, criterion):
   """
   #model.train(False)
   model.eval() # go into evaluation mode
-  iter, acc, err = 0, 0, 0
+  acc, err = 0, 0
   with torch.no_grad():
     total_loss = 0.0
     total_acc = 0.0
@@ -193,9 +194,11 @@ def evaluate(model, loader, criterion):
       total_loss += loss.item()
       # total_acc += get_accuracy(nn.LogSoftmax(pred, dim=1), rating)
       total_acc += get_accuracy(pred, rating)
-      iter += 1
-    err = float(total_loss) / (iter)
-    acc = float(total_acc) / (iter)
+      if (iter + 1) % 100 == 0:
+        print("Iter {}     -     Loss: {}     -       Accuracy: {}".format(iter+1, total_loss / (iter+1), total_acc / (iter+1)))
+    
+    err = (total_loss) / (iter + 1)
+    acc = (total_acc) / (iter + 1) # average accuracy across all batches
   return err, acc
 
 
@@ -228,21 +231,21 @@ def train(model, train_loader, val_loader, epochs, learning_rate):
       # weight updates
       optimizer.step()
       # add in loss and accuracy (number of correctly predicted ratings)
-      total_loss += float(loss)
-      total_acc += float(get_accuracy(pred, rating))
-      # total_acc += float(get_accuracy(nn.LogSoftmax(pred, dim=1), rating))
+      total_loss += (loss)
+      total_acc += (get_accuracy(pred, rating))
     
       # for us to see where we are in training
-      if (iter+1) % 2000 == 0:
-        print("Epoch {}  - Iteration {}  - Training Time: {}".format(epoch+1, iter+1, startTime-time.time()))
+      if (iter+1) % 100 == 0:
+        print("Epoch {}  - Iteration {}  - Training Time: {} -     Loss: {}     -     Accuracy: {}".format(epoch+1, iter+1, time.time()-startTime,
+        total_loss / (iter+1), total_acc / (iter+1)))
 
     train_loss.append(total_loss / (iter+1)) # calculate the average loss across all iterations per epoch
-    train_acc.append(total_acc / (iter+1))
+    train_acc.append(total_acc / (iter+1)) # calculate the average accuracy across all batches
     total_loss = 0.0
     # compute validation loss at the end of each epoch
-    val_err, val_acc = evaluate(model, val_loader, criterion)
+    val_err, val_avg_acc = evaluate(model, val_loader, criterion)
     val_loss.append(val_err)
-    val_acc.append(val_acc)
+    val_acc.append(val_avg_acc)
 
     print("END  ---  Epoch {}  ---  Training Error: {}  ---   Validation Error: {}".format(
         epoch, train_loss[epoch], val_loss[epoch]
