@@ -27,7 +27,7 @@ class OurDataset(Dataset):
 
   def __getitem__(self, ind):
     review = self.data.loc[ind, 'reviewText']
-    rating = int(self.data.loc[ind, 'overall']) - 1 # Ratings=1,2,3,4,5
+    rating = int(self.data.loc[ind, 'overall']) - 1 # Ratings=1,2,3,4,5 to 0,1,2,3,4
     # use the BERT Tokenizer to ensure review is represented similarly
     tokens = self.tokenizer.tokenize(review)
     # recall that BERT uses additional token embeddings
@@ -74,7 +74,7 @@ class RatingPredictor(nn.Module):
     # our classifer on top of the BERT Model
     self.linear1 = nn.Linear(768, 500)
     self.relu = nn.ReLU()
-    self.drop = nn.Dropout(0.5) # dropout with 50%
+    self.drop = nn.Dropout(0.2) # dropout with 50%
     self.linear2 = nn.Linear(500, rating_scale)
     # self.fc = nn.LogSoftmax(dim=0) # to calculate the probabilities
     self.fc = nn.LogSoftmax(dim=1)
@@ -173,7 +173,7 @@ def dataloader(fileName, bs):
 
 def get_accuracy(pred, label):
   # determine the index of the most likely rating
-  index = torch.argmin(pred, dim = 1) + 1
+  index = torch.argmax(pred, dim = 1)
   # return the number of correctly predicted ratings / number of total examples in a batch
   return (index==label).sum().item()
 
@@ -194,8 +194,8 @@ def evaluate(model, loader, loader_len, criterion):
       total_loss += loss.item()
       total_acc += get_accuracy(pred, rating)
       if (iter + 1) % 100 == 0:
-        print("Iter {}     -     Loss: {}     -       Accuracy: {}".format(iter+1, total_loss / (iter+1), total_acc / (iter+1)))
-    
+        print("Iter {}     -     Loss: {}     -      Accuracy: {}".format(iter+1, total_loss / (iter+1), total_acc / (iter*32)))
+
     err = (total_loss) / (iter + 1)
     acc = (total_acc) / (loader_len) # the total number of correctly predicted 
   return err, acc
@@ -235,9 +235,8 @@ def train(model, train_loader, train_len, val_loader, val_len, epochs, learning_
     
       # for us to see where we are in training
       if (iter+1) % 100 == 0:
-        print("Epoch {}  - Iteration {}  - Training Time: {} -     Loss: {}".format(epoch+1, iter+1, time.time()-startTime,
-        total_loss / (iter+1)))
-
+        print("Epoch {}  - Iter {}  - Training Time: {} -     Loss: {}      -    Accuracy: {}".format(epoch+1, iter+1, time.time()-startTime,
+        total_loss / (iter+1), total_acc / (iter*32)))
     train_loss.append(total_loss / (iter+1)) # calculate the average loss across all iterations per epoch
     train_acc.append(total_acc / train_len) # calculate the number of correctly predicted ratings / total training examples
     total_loss = 0.0
@@ -249,7 +248,6 @@ def train(model, train_loader, train_len, val_loader, val_len, epochs, learning_
     print("END  ---  Epoch {}  ---  Training Error: {}  ---   Validation Error: {}".format(
         epoch, train_loss[epoch], val_err))
   return train_loss, train_acc, val_loss, val_acc
-
 
 if __name__ == "__main__": 
   # load the data for training and validation, set aside the test
